@@ -1,0 +1,55 @@
+{
+  "nmap": {
+    "enabled": true,
+    "default_flags": ["-sV", "-sC"],
+    "timing": "-T4",
+    "max_ports": "1000",
+    "timeout": 900,
+    "timeout_quick": 300,
+    "timeout_basic": 600,
+    "timeout_comprehensive": 900,
+    "timeout_vuln": 1800,
+    "timeout_discovery": 300,
+    "custom_scripts": []
+  },
+  "nikto": {
+    "enabled": true,
+    "max_time": 600,
+    "custom_flags": ["-Tuning", "1,2,3,4,5,b"]
+  },
+  "dirb": {
+    "enabled": true,
+    "wordlist": "/usr/share/dirb/wordlists/big.txt",
+    "timeout": 600,
+    "extensions": [".php", ".html", ".txt", ".js"]
+  },
+  "network_discovery": {
+    "enabled": true,
+    "timeout": 300,
+    "auto_expand_cidr": true
+  },
+  "testssl": {
+    "enabled": true,
+    "path": "testssl.sh",
+    "timeout": 300,
+    "args": ["-U"]
+  },
+  "searchsploit": {
+    "enabled": true,
+    "path": "searchsploit",
+    "timeout": 60,
+    "query": null
+  },
+  "enum4linux": {
+    "enabled": true,
+    "path": "enum4linux",
+    "timeout": 120,
+    "args": ["-a"]
+  },
+  "snmp": {
+    "enabled": true,
+    "path_snmpcheck": "snmp-check",
+    "timeout": 60,
+    "community": "public"
+  }
+}

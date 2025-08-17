@@ -1,0 +1,22 @@
+# VulnScan Suite - Dependências Python
+# Versão melhorada com foco em redes locais e relatórios aprimorados
+
+# Para geração de relatórios PDF
+weasyprint>=60.0
+
+# Para manipulação de dados e análise
+pandas>=1.5.0
+
+# Para gráficos e visualizações (opcional)
+matplotlib>=3.6.0
+plotly>=5.0.0
+
+# Para validação de IPs e redes
+ipaddress  # Incluído no Python 3.3+
+
+# Para processamento de HTML/XML
+beautifulsoup4>=4.11.0
+
+# Para requisições HTTP (se necessário para verificações adicionais)
+requests>=2.28.0
+
