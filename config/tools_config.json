@@ -3,7 +3,7 @@
     "enabled": true,
     "default_flags": ["-sV", "-sC"],
     "timing": "-T4",
-    "max_ports": "1000",
+    "max_ports": 1000,
     "timeout": 900,
     "timeout_quick": 300,
     "timeout_basic": 600,
@@ -19,7 +19,7 @@
   },
   "dirb": {
     "enabled": true,
-    "wordlist": "/usr/share/dirb/wordlists/big.txt",
+    "wordlist": "/usr/share/dirb/wordlists/common.txt",
     "timeout": 600,
     "extensions": [".php", ".html", ".txt", ".js"]
   },
@@ -48,7 +48,7 @@
   },
   "snmp": {
     "enabled": true,
-    "path_snmpcheck": "snmp-check",
+    "path_snmpcheck": "snmpcheck",
     "timeout": 60,
     "community": "public"
   }

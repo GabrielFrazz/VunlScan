@@ -4,13 +4,14 @@ import logging
 import os
 import sys
 import signal
-import threading
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Any
 from datetime import datetime
 
 # Importações dos módulos locais
 from modules import nmap_scanner, nikto_scanner, dirb_scanner, report_generator, network_discovery, extra_network_scanners
+from modules.web_service_detector import should_run_web_scanner
 
 # Variável global para logger, configurada por setup_logging
 logger: logging.Logger
@@ -85,7 +86,7 @@ class VulnScanSuite:
                 "enabled": True,
                 "default_flags": ["-sV", "-sC"],
                 "timing": "-T4",
-                "max_ports": "1000",
+                "max_ports": 1000,
                 "timeout": 900,
                 "timeout_quick": 300,
                 "timeout_basic": 600,
@@ -193,13 +194,27 @@ class VulnScanSuite:
 
         self.logger.info(f"Iniciando scan do target '{target}' com intensidade '{scan_intensity}' e ferramentas: {', '.join(tools_to_run)}")
 
+        # --- Detecção web Única ---
+        # Executa a detecção de serviços web UMA única vez antes do pool de threads.
+        # Isso evita que nikto e dirb rodassem cada um seu próprio nmap de detecção,
+        # resultando em 3 processos nmap simultâneos por target.
+        web_urls_for_target: List[str] = []
+        needs_web_scanners = any(t in tools_to_run for t in ('nikto', 'dirb'))
+        if needs_web_scanners:
+            self.logger.info(f"Detectando serviços web em {target} (detecção centralizada)...")
+            web_detected, web_urls_for_target = should_run_web_scanner(target, self.logger)
+            if web_detected:
+                self.logger.info(f"Serviços web encontrados em {target}: {web_urls_for_target}")
+            else:
+                self.logger.info(f"Nenhum serviço web detectado em {target}. Nikto/Dirb serão pulados.")
+
         max_workers = 1 if len(tools_to_run) == 1 else min(len(tools_to_run), 5)
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {}
             
             # Scanners padrão
-            if 'nmap' in tools_to_run and self.config.get('nmap', {}).get('enabled', False):
+            if 'nmap' in tools_to_run:
                 nmap_config_tool = self.config.get('nmap', {})
                 nmap_scan_type_map = {
                     'quick': 'quick', 'basic': 'basic', 'normal': 'comprehensive', 'comprehensive': 'vuln'
@@ -207,30 +222,30 @@ class VulnScanSuite:
                 nmap_scan_type = nmap_scan_type_map.get(scan_intensity, 'basic')
                 futures['nmap'] = executor.submit(nmap_scanner.run_nmap_scan, target, nmap_config_tool, self.logger, scan_type=nmap_scan_type)
 
-            if 'nikto' in tools_to_run and self.config.get('nikto', {}).get('enabled', False):
+            if 'nikto' in tools_to_run:
                 nikto_config_tool = self.config.get('nikto', {})
-                futures['nikto'] = executor.submit(nikto_scanner.run_nikto_scan, target, nikto_config_tool, self.logger)
+                # Passa web_urls já detectadas para evitar nmap duplicado
+                futures['nikto'] = executor.submit(nikto_scanner.run_nikto_scan, target, nikto_config_tool, self.logger, web_urls=web_urls_for_target)
             
-            if 'dirb' in tools_to_run and self.config.get('dirb', {}).get('enabled', False):
+            if 'dirb' in tools_to_run:
                 dirb_config_tool = self.config.get('dirb', {})
-                futures['dirb'] = executor.submit(dirb_scanner.run_dirb_scan, target, dirb_config_tool, self.logger)
+                # Passa web_urls já detectadas para evitar nmap duplicado
+                futures['dirb'] = executor.submit(dirb_scanner.run_dirb_scan, target, dirb_config_tool, self.logger, web_urls=web_urls_for_target)
 
             # Scanners extras
-            if 'testssl' in tools_to_run and self.config.get('testssl', {}).get('enabled', False):
+            if 'testssl' in tools_to_run:
                 testssl_config = self.config.get('testssl', {})
                 futures['testssl'] = executor.submit(extra_network_scanners.run_testssl_scan, target, testssl_config, self.logger)
 
-            if 'searchsploit' in tools_to_run and self.config.get('searchsploit', {}).get('enabled', False):
+            if 'searchsploit' in tools_to_run:
                 searchsploit_config = self.config.get('searchsploit', {})
-                # Para uma busca mais eficaz, poderíamos usar banners de serviços do Nmap.
-                # Por simplicidade, usamos o target como termo de busca.
                 futures['searchsploit'] = executor.submit(extra_network_scanners.run_searchsploit_scan, target, searchsploit_config, self.logger)
 
-            if 'enum4linux' in tools_to_run and self.config.get('enum4linux', {}).get('enabled', False):
+            if 'enum4linux' in tools_to_run:
                 enum4linux_config = self.config.get('enum4linux', {})
                 futures['enum4linux'] = executor.submit(extra_network_scanners.run_enum4linux_scan, target, enum4linux_config, self.logger)
             
-            if 'snmp' in tools_to_run and self.config.get('snmp', {}).get('enabled', False):
+            if 'snmp' in tools_to_run:
                 snmp_config = self.config.get('snmp', {})
                 futures['snmp'] = executor.submit(extra_network_scanners.run_snmp_scan, target, snmp_config, self.logger)
 
