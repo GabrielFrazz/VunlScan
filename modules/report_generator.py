@@ -3,13 +3,11 @@ import logging
 import os
 from datetime import datetime
 from typing import Dict, List
-import base64
 
 logger = logging.getLogger(__name__)
 
 def generate_summary_report(results: Dict, logger_param: logging.Logger) -> str:
-    global logger
-    logger = logger_param
+    log = logger_param
     
     summary = []
     scan_info = results.get('scan_info', {})
@@ -132,22 +130,21 @@ def generate_summary_report(results: Dict, logger_param: logging.Logger) -> str:
                 summary.append(f"❌ Dirb: {dirb_data['error']}")
             else:
                 target_has_web = True
-                total_dirs = dirb_data.get('total_directories', 0)
-                total_files = dirb_data.get('total_files', 0)
+                total_found = dirb_data.get('total_found', 0)
                 
-                summary.append(f"📁 Dirb: {total_dirs} diretórios, {total_files} arquivos encontrados")
+                summary.append(f"📁 Dirb: {total_found} caminhos encontrados")
                 
                 for url_result in dirb_data.get('results', [])[:2]:  # Primeiras 2 URLs
                     url = url_result.get('url', 'N/A')
                     parsed = url_result.get('parsed', {})
-                    interesting_files = [f for f in parsed.get('files_found', []) if f.get('interesting', False)]
+                    found_paths = parsed.get('found_paths', [])
                     
-                    if interesting_files:
-                        summary.append(f"   📍 {url} - Arquivos interessantes:")
-                        for file_info in interesting_files[:5]:  
-                            path = file_info.get('path', 'N/A')
-                            status = file_info.get('status_code', 'N/A')
-                            summary.append(f"      📄 {path} (HTTP {status})")
+                    if found_paths:
+                        summary.append(f"   📍 {url} - Caminhos:")
+                        for path_info in found_paths[:5]:  
+                            path_url = path_info.get('url', 'N/A')
+                            status = path_info.get('status_code', 'N/A')
+                            summary.append(f"      📄 {path_url} (HTTP {status})")
 
         if 'testssl' in target_results_tools:
             testssl_data = target_results_tools['testssl']
@@ -205,8 +202,7 @@ def generate_summary_report(results: Dict, logger_param: logging.Logger) -> str:
 
 def generate_html_report(results: Dict, logger_param: logging.Logger) -> str:
     """Gera relatório em formato HTML profissional"""
-    global logger
-    logger = logger_param
+    log = logger_param
     
     scan_info = results.get('scan_info', {})
     
@@ -690,51 +686,38 @@ def generate_dirb_html(dirb_data: Dict) -> str:
         </div>
         """
     
-    total_dirs = dirb_data.get('total_directories', 0)
-    total_files = dirb_data.get('total_files', 0)
+    total_found = dirb_data.get('total_found', 0)
     
     results_html = ""
     for url_result in dirb_data.get('results', []):
         url = url_result.get('url', 'N/A')
         parsed = url_result.get('parsed', {})
         
-        interesting_files = [f for f in parsed.get('files_found', []) if f.get('interesting', False)]
-        directories = parsed.get('directories_found', [])
+        found_paths = parsed.get('found_paths', [])
         
-        if interesting_files or directories:
+        if found_paths:
             results_html += f"<h5>📍 {url}</h5>"
             
-            if directories:
-                dir_items = [f'<li>📁 {d.get("path", "N/A")}</li>' for d in directories[:10]]
-                results_html += f"""
-                <h6>Diretórios ({len(directories)})</h6>
-                <ul class="finding-list">
-                    {''.join(dir_items)}
-                </ul>
-                """
-                if len(directories) > 10:
-                    results_html += f"<p><em>... e mais {len(directories) - 10} diretórios.</em></p>"
+            path_items = []
+            for path_info in found_paths[:20]:
+                path_url = path_info.get('url', 'N/A')
+                status = path_info.get('status_code', 'N/A')
+                icon = "📁" if path_info.get('type') == 'directory' else "📄"
+                path_items.append(f'<li>{icon} {path_url} <span style="color: #666;">(HTTP {status})</span></li>')
             
-            if interesting_files:
-                file_items = []
-                for file_info in interesting_files[:10]:
-                    path = file_info.get('path', 'N/A')
-                    status = file_info.get('status_code', 'N/A')
-                    file_items.append(f'<li>📄 {path} <span style="color: #666;">(HTTP {status})</span></li>')
-                
-                results_html += f"""
-                <h6>Arquivos Interessantes ({len(interesting_files)})</h6>
-                <ul class="finding-list">
-                    {''.join(file_items)}
-                </ul>
-                """
-                if len(interesting_files) > 10:
-                    results_html += f"<p><em>... e mais {len(interesting_files) - 10} arquivos.</em></p>"
+            results_html += f"""
+            <h6>Caminhos Encontrados ({len(found_paths)})</h6>
+            <ul class="finding-list">
+                {''.join(path_items)}
+            </ul>
+            """
+            if len(found_paths) > 20:
+                results_html += f"<p><em>... e mais {len(found_paths) - 20} caminhos.</em></p>"
     
     return f"""
     <div class="tool-result">
         <h4>📁 Dirb</h4>
-        <p><strong>📊 Resultados:</strong> {total_dirs} diretórios, {total_files} arquivos</p>
+        <p><strong>📊 Resultados:</strong> {total_found} caminhos encontrados</p>
         {results_html}
     </div>
     """
@@ -871,8 +854,7 @@ def calculate_statistics(results: Dict) -> Dict:
 
 def save_results(results: Dict, report_format: str, logger_param: logging.Logger, base_report_dir: str = "reports"):
     """Salva resultados em diferentes formatos"""
-    global logger
-    logger = logger_param
+    log = logger_param
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
@@ -882,7 +864,7 @@ def save_results(results: Dict, report_format: str, logger_param: logging.Logger
             os.makedirs(os.path.dirname(filename), exist_ok=True)
             with open(filename, 'w', encoding='utf-8') as f:
                 json.dump(results, f, indent=2, ensure_ascii=False)
-            logger.info(f"Relatório JSON salvo: {filename}")
+            log.info(f"Relatório JSON salvo: {filename}")
 
         elif report_format == 'txt':
             filename = os.path.join(base_report_dir, 'txt', f"vulnscan_summary_{timestamp}.txt")
@@ -890,7 +872,7 @@ def save_results(results: Dict, report_format: str, logger_param: logging.Logger
             summary_content = generate_summary_report(results, logger_param)
             with open(filename, 'w', encoding='utf-8') as f:
                 f.write(summary_content)
-            logger.info(f"Relatório TXT salvo: {filename}")
+            log.info(f"Relatório TXT salvo: {filename}")
         
         elif report_format == 'html':
             filename = os.path.join(base_report_dir, 'html', f"vulnscan_report_{timestamp}.html")
@@ -898,7 +880,7 @@ def save_results(results: Dict, report_format: str, logger_param: logging.Logger
             html_content = generate_html_report(results, logger_param)
             with open(filename, 'w', encoding='utf-8') as f:
                 f.write(html_content)
-            logger.info(f"Relatório HTML salvo: {filename}")
+            log.info(f"Relatório HTML salvo: {filename}")
         
         elif report_format == 'pdf':
             html_content = generate_html_report(results, logger_param)
@@ -914,55 +896,55 @@ def save_results(results: Dict, report_format: str, logger_param: logging.Logger
             try:
                 import weasyprint
                 weasyprint.HTML(filename=html_filename).write_pdf(pdf_filename)
-                logger.info(f"Relatório PDF salvo: {pdf_filename}")
+                log.info(f"Relatório PDF salvo: {pdf_filename}")
             except ImportError:
-                logger.warning("WeasyPrint não disponível. Instalando...")
-                import subprocess
-                subprocess.run(['pip', 'install', 'weasyprint'], check=True)
-                import weasyprint
-                weasyprint.HTML(filename=html_filename).write_pdf(pdf_filename)
-                logger.info(f"Relatório PDF salvo: {pdf_filename}")
+                # NÃO instala automaticamente — exige instalação manual pelo usuário
+                log.error(
+                    "WeasyPrint não instalado. O relatório HTML foi salvo como alternativa. "
+                    f"Para gerar PDF, instale com: pip install weasyprint\n"
+                    f"HTML disponível em: {html_filename}"
+                )
             except Exception as e:
-                logger.error(f"Erro ao gerar PDF: {str(e)}. HTML salvo em: {html_filename}")
+                log.error(f"Erro ao gerar PDF: {str(e)}. HTML salvo em: {html_filename}")
         
     except Exception as e:
-        logger.error(f"Erro ao salvar relatório {report_format.upper()}: {str(e)}")
+        log.error(f"Erro ao salvar relatório {report_format.upper()}: {str(e)}")
 
 def estimate_scan_time(num_targets: int, tools: List[str], intensity: str, logger_param: logging.Logger) -> str:
-    """Estima tempo de execução do scan"""
-    global logger
-    logger = logger_param 
+    """Estima tempo de execução do scan
+    
+    A estimativa é calculada somando os tempos individuais de cada ferramenta por target.
+    Ferramentas rodam em paralelo por target, então o tempo total é dominado pela mais lenta
+    (com um fator de overhead para coordenação entre threads).
+    """
+    log = logger_param
 
-    base_times_per_tool = { 
-        'nmap': {'quick': 1, 'basic': 3, 'normal': 5, 'comprehensive': 10},
-        'nikto': {'quick': 2, 'basic': 5, 'normal': 8, 'comprehensive': 12},
-        'dirb': {'quick': 2, 'basic': 5, 'normal': 8, 'comprehensive': 10}  
+    base_times_per_tool = {
+        'nmap':         {'quick': 1,  'basic': 3,  'normal': 5,  'comprehensive': 10},
+        'nikto':        {'quick': 2,  'basic': 5,  'normal': 8,  'comprehensive': 12},
+        'dirb':         {'quick': 2,  'basic': 5,  'normal': 8,  'comprehensive': 10},
+        'testssl':      {'quick': 2,  'basic': 3,  'normal': 5,  'comprehensive': 5},
+        'enum4linux':   {'quick': 1,  'basic': 2,  'normal': 3,  'comprehensive': 3},
+        'snmp':         {'quick': 1,  'basic': 1,  'normal': 1,  'comprehensive': 1},
+        'searchsploit': {'quick': 1,  'basic': 1,  'normal': 1,  'comprehensive': 1},
     }
     
-    intensity_map = {
-        'quick': 'quick',
-        'basic': 'basic',
-        'normal': 'normal',
-        'comprehensive': 'comprehensive' 
-    }
-    effective_intensity = intensity_map.get(intensity, 'basic')
+    effective_intensity = intensity if intensity in ('quick', 'basic', 'normal', 'comprehensive') else 'basic'
 
-    total_minutes = 0
+    if not tools or num_targets <= 0:
+        return "< 1 minuto"
+
+    # Como ferramentas rodam em paralelo por target, usamos o máximo das ferramentas
+    # multiplicado por um fator de overhead (1.3 para coordenação de threads)
+    max_tool_time = 0
     for tool in tools:
-        if tool in base_times_per_tool:
-            tool_times = base_times_per_tool[tool]
-            time_for_tool = tool_times.get(effective_intensity, tool_times.get('basic', 5)) 
-            total_minutes += time_for_tool
-        else:
-            total_minutes += 5
+        tool_times = base_times_per_tool.get(tool, {})
+        t = tool_times.get(effective_intensity, tool_times.get('basic', 5))
+        if t > max_tool_time:
+            max_tool_time = t
 
-    total_minutes *= num_targets
-    
-    if len(tools) > 3:
-         total_minutes *= (len(tools) / 3) * 0.7 
-
-    if total_minutes == 0 and num_targets > 0: 
-        total_minutes = num_targets * 2 
+    # Tempo total: tempo do tool mais lento × número de targets × fator de overhead
+    total_minutes = max_tool_time * num_targets * 1.3
 
     if total_minutes < 1:
         return "< 1 minuto"
