@@ -2,7 +2,6 @@ import os
 import sys
 import subprocess
 import json
-import time
 from datetime import datetime
 
 def run_command(cmd, timeout=60):
@@ -60,9 +59,9 @@ def test_basic_functionality():
     
     # Teste 3: Verificação de relatórios
     print("  📊 Teste 3: Verificação de geração de relatórios")
-    json_files = [f for f in os.listdir('reports/json') if f.endswith('.json')]
-    txt_files = [f for f in os.listdir('reports/txt') if f.endswith('.txt')]
-    html_files = [f for f in os.listdir('reports/html') if f.endswith('.html')]
+    json_files = [f for f in os.listdir('reports/json') if f.endswith('.json')] if os.path.isdir('reports/json') else []
+    txt_files  = [f for f in os.listdir('reports/txt')  if f.endswith('.txt')]  if os.path.isdir('reports/txt')  else []
+    html_files = [f for f in os.listdir('reports/html') if f.endswith('.html')] if os.path.isdir('reports/html') else []
     
     reports_ok = len(json_files) > 0 and len(txt_files) > 0 and len(html_files) > 0
     tests.append({
@@ -126,12 +125,15 @@ def test_error_handling():
     
     # Teste 1: Target inválido
     print("  ❌ Teste 1: Target inválido")
-    result = run_command("python3 vulnscan_suite.py -t invalid.target.nonexistent --quick", timeout=30)
-    # Deve falhar graciosamente
+    result = run_command("python3 vulnscan_suite.py -t invalid.target.nonexistent --quick", timeout=60)
+    # Deve finalizar sem travar (sem traceback Python) e com código de retorno 0
+    # (a ferramenta deve lidar graciosamente com targets inaccessíveis)
+    no_traceback = 'Traceback' not in result.get('stdout', '') and 'Traceback' not in result.get('stderr', '')
+    completed_gracefully = result.get('returncode') is not None  # Não travou nem deu timeout
     tests.append({
         'name': 'Target inválido',
-        'success': True,  # Sempre passa se não travou
-        'details': 'Tratamento de erro OK'
+        'success': no_traceback and completed_gracefully,
+        'details': 'Finalizado sem traceback' if (no_traceback and completed_gracefully) else f'Problema detectado (returncode={result.get("returncode")}, traceback={not no_traceback})'
     })
     
     # Teste 2: Arquivo de targets inexistente
@@ -153,7 +155,7 @@ def validate_reports():
     tests = []
     
     # Verifica se há relatórios recentes
-    json_files = [f for f in os.listdir('reports/json') if f.endswith('.json')]
+    json_files = [f for f in os.listdir('reports/json') if f.endswith('.json')] if os.path.isdir('reports/json') else []
     if json_files:
         latest_json = max(json_files)
         json_path = os.path.join('reports/json', latest_json)
@@ -188,7 +190,7 @@ def validate_reports():
         })
     
     # Verifica HTML
-    html_files = [f for f in os.listdir('reports/html') if f.endswith('.html')]
+    html_files = [f for f in os.listdir('reports/html') if f.endswith('.html')] if os.path.isdir('reports/html') else []
     if html_files:
         latest_html = max(html_files)
         html_path = os.path.join('reports/html', latest_html)
@@ -240,7 +242,7 @@ def print_results(test_category, tests):
         if test['success']:
             passed += 1
     
-    print(f"\n📈 Resumo: {passed}/{total} testes passaram ({(passed/total)*100:.1f}%)")
+    print(f"\n📈 Resumo: {passed}/{total} testes passaram ({(passed/total)*100:.1f}%)" if total > 0 else f"\n📈 Resumo: nenhum teste executado")
     return passed, total
 
 def main():

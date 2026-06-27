@@ -1,27 +1,46 @@
 import logging
 import subprocess
+import shutil
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 from .web_service_detector import should_run_web_scanner
 
 logger = logging.getLogger(__name__)
 
-def run_dirb_scan(target: str, dirb_config: Dict, logger_param: logging.Logger) -> Dict:
-    """Executa scan com Dirb com detecção inteligente de serviços web"""
-    global logger
-    logger = logger_param
+def run_dirb_scan(target: str, dirb_config: Dict, logger_param: logging.Logger,
+                  web_urls: Optional[List[str]] = None) -> Dict:
+    """
+    Executa scan com Dirb com detecção inteligente de serviços web.
 
-    logger.info(f"Iniciando scan Dirb no target: {target}")
+    Args:
+        target: IP ou hostname do alvo
+        dirb_config: Configuração do Dirb
+        logger_param: Logger para uso na thread atual (sem global para evitar race condition)
+        web_urls: URLs web já detectadas (evita detecção duplicada quando chamado via suite).
+                  Se None, realiza detecção própria.
+    """
+    log = logger_param
+
+    log.info(f"Iniciando scan Dirb no target: {target}")
 
     if not dirb_config.get('enabled', False):
-        logger.warning(f"Dirb desabilitado ou não configurado para o target {target}")
+        log.warning(f"Dirb desabilitado ou não configurado para o target {target}")
         return {'tool': 'dirb', 'target': target, 'error': 'Ferramenta desabilitada na configuração'}
 
-    # Verifica se o target possui serviços web
-    should_run, web_urls = should_run_web_scanner(target, logger_param)
-    
-    if not should_run:
-        logger.info(f"Dirb pulado para {target} - nenhum serviço web detectado")
+    # Verifica se dirb está instalado
+    if not shutil.which('dirb'):
+        log.error("dirb não encontrado no PATH. Instale com: sudo apt install dirb")
+        return {'tool': 'dirb', 'target': target, 'skipped': True, 'reason': 'dirb não encontrado no sistema'}
+
+    # Usa URLs fornecidas ou realiza detecção própria (uso standalone)
+    if web_urls is not None:
+        should_run = len(web_urls) > 0
+        urls_to_scan = web_urls
+    else:
+        should_run, urls_to_scan = should_run_web_scanner(target, log)
+
+    if not should_run or not urls_to_scan:
+        log.info(f"Dirb pulado para {target} - nenhum serviço web detectado")
         return {
             'tool': 'dirb',
             'target': target,
@@ -30,30 +49,41 @@ def run_dirb_scan(target: str, dirb_config: Dict, logger_param: logging.Logger) 
             'timestamp': datetime.now().isoformat()
         }
 
-    # Executa Dirb para cada URL detectada
-    results = []
     wordlist = dirb_config.get('wordlist', '/usr/share/dirb/wordlists/common.txt')
     timeout = dirb_config.get('timeout', 600)
     extensions = dirb_config.get('extensions', [])
     
-    for url in web_urls:
+    # Verifica se a wordlist existe
+    if not shutil.os.path.exists(wordlist):
+        fallback = '/usr/share/dirb/wordlists/common.txt'
+        log.warning(f"Wordlist não encontrada: {wordlist}. Tentando fallback: {fallback}")
+        wordlist = fallback
+        if not shutil.os.path.exists(wordlist):
+            log.error("Nenhuma wordlist disponível para Dirb")
+            return {'tool': 'dirb', 'target': target, 'error': f'Wordlist não encontrada: {wordlist}'}
+
+    all_results = []
+    
+    for url in urls_to_scan:
         try:
-            logger.info(f"Executando Dirb em: {url}")
+            log.info(f"Executando Dirb em: {url}")
             
-            cmd_parts = ['dirb', url, wordlist]
+            cmd_parts = ['dirb', url, wordlist, '-S']
             if extensions:
-                # Formata extensões corretamente para o Dirb
-                ext_string = ','.join([ext.lstrip('.') for ext in extensions])
-                cmd_parts.extend(['-X', f".{ext_string}"])
+                # cada extensão precisa de seu próprio ponto
+                # ['.php', '.html', '.txt'] → '.php,.html,.txt'
+                ext_string = ','.join([f'.{ext.lstrip(".")}' for ext in extensions])
+                cmd_parts.extend(['-X', ext_string])
             
-            cmd = ' '.join(cmd_parts)
-            logger.info(f"Executando comando Dirb: {cmd}")
-            logger.info(f"Timeout Dirb configurado: {timeout}s")
+            # Sem shell=True — lista de argumentos para evitar injeção
+            cmd_str = ' '.join(cmd_parts)
+            log.info(f"Executando comando Dirb: {cmd_str}")
+            log.info(f"Timeout Dirb configurado: {timeout}s")
             
             start_time = datetime.now()
             result = subprocess.run(
-                cmd,
-                shell=True,
+                cmd_parts,
+                shell=False,
                 capture_output=True,
                 text=True,
                 errors='ignore',
@@ -63,57 +93,48 @@ def run_dirb_scan(target: str, dirb_config: Dict, logger_param: logging.Logger) 
             
             url_result = {
                 'url': url,
-                'command': cmd,
+                'command': cmd_str,
                 'returncode': result.returncode,
                 'stdout': result.stdout,
                 'stderr': result.stderr,
                 'elapsed_time': elapsed_time,
-                'parsed': parse_dirb_results(result.stdout, logger_param)
+                'parsed': parse_dirb_results(result.stdout, log)
             }
             
-            results.append(url_result)
-            logger.info(f"Scan Dirb em {url} concluído em {elapsed_time:.2f}s")
+            all_results.append(url_result)
+            log.info(f"Scan Dirb em {url} concluído em {elapsed_time:.2f}s")
             
         except subprocess.TimeoutExpired:
-            logger.error(f"Timeout ({timeout}s) no scan Dirb para {url}")
-            results.append({
+            log.error(f"Timeout ({timeout}s) no scan Dirb para {url}")
+            all_results.append({
                 'url': url,
                 'error': f'timeout after {timeout}s',
                 'elapsed_time': timeout
             })
         except Exception as e:
-            logger.error(f"Erro no scan Dirb para {url}: {str(e)}")
-            results.append({
-                'url': url,
-                'error': str(e)
-            })
+            log.error(f"Erro no scan Dirb para {url}: {str(e)}")
+            all_results.append({'url': url, 'error': str(e)})
 
-    # Consolida resultados
-    total_directories = sum(len(r.get('parsed', {}).get('directories_found', [])) for r in results)
-    total_files = sum(len(r.get('parsed', {}).get('files_found', [])) for r in results)
+    total_found = sum(len(r.get('parsed', {}).get('found_paths', [])) for r in all_results)
     
     return {
         'tool': 'dirb',
         'target': target,
-        'urls_scanned': web_urls,
-        'results': results,
-        'total_directories': total_directories,
-        'total_files': total_files,
+        'urls_scanned': urls_to_scan,
+        'results': all_results,
+        'total_found': total_found,
         'timestamp': datetime.now().isoformat()
     }
 
 def parse_dirb_results(dirb_output: str, logger_param: logging.Logger) -> Dict:
-    """Parser melhorado para resultados do Dirb"""
-    global logger
-    logger = logger_param
+    """Parser para resultados do Dirb"""
+    log = logger_param
     
     parsed = {
-        'directories_found': [],
-        'files_found': [],
+        'found_paths': [],
         'summary': {
-            'total_directories': 0,
-            'total_files': 0,
-            'interesting_files': 0
+            'total_found': 0,
+            'interesting_paths': []
         }
     }
     
@@ -125,96 +146,37 @@ def parse_dirb_results(dirb_output: str, logger_param: logging.Logger) -> Dict:
     for line in lines:
         line = line.strip()
         
-        # Diretórios encontrados
-        if line.startswith('==> DIRECTORY:'):
-            directory = line.replace('==> DIRECTORY:', '').strip()
-            parsed['directories_found'].append({
-                'path': directory,
-                'type': 'directory'
-            })
-            parsed['summary']['total_directories'] += 1
-        
-        # Arquivos encontrados (CODE:200)
-        elif 'CODE:200' in line and 'SIZE:' in line:
-            # Formato típico: "+ http://example.com/file.txt (CODE:200|SIZE:1234)"
-            if line.startswith('+'):
-                parts = line[1:].strip().split(' (CODE:200')
-                if len(parts) >= 2:
-                    file_path = parts[0].strip()
-                    size_info = parts[1].strip()
-                    
-                    # Extrai tamanho se disponível
-                    size = None
-                    if 'SIZE:' in size_info:
-                        try:
-                            size = int(size_info.split('SIZE:')[1].split(')')[0])
-                        except (ValueError, IndexError):
-                            pass
-                    
-                    file_info = {
-                        'path': file_path,
-                        'type': 'file',
-                        'status_code': 200,
-                        'size': size,
-                        'interesting': is_interesting_file(file_path)
-                    }
-                    
-                    parsed['files_found'].append(file_info)
-                    parsed['summary']['total_files'] += 1
-                    
-                    if file_info['interesting']:
-                        parsed['summary']['interesting_files'] += 1
-        
-        # Outros códigos de status interessantes
-        elif any(code in line for code in ['CODE:301', 'CODE:302', 'CODE:403', 'CODE:401']):
-            if line.startswith('+'):
-                parts = line[1:].strip().split(' (CODE:')
-                if len(parts) >= 2:
-                    file_path = parts[0].strip()
+        # Linhas com paths encontrados começam com '+'
+        if line.startswith('+ ') or line.startswith('==> DIRECTORY:'):
+            if 'CODE:' in line:
+                parts = line.split('CODE:')
+                url_part = parts[0].replace('+', '').strip()
+                
+                try:
                     status_code = int(parts[1][:3])
-                    
-                    file_info = {
-                        'path': file_path,
-                        'type': 'file' if '.' in file_path.split('/')[-1] else 'directory',
-                        'status_code': status_code,
-                        'interesting': status_code in [301, 302, 403, 401]
-                    }
-                    
-                    if status_code in [301, 302]:
-                        parsed['directories_found'].append(file_info)
-                    else:
-                        parsed['files_found'].append(file_info)
-                        if file_info['interesting']:
-                            parsed['summary']['interesting_files'] += 1
+                except (ValueError, IndexError):
+                    status_code = 0
+                
+                path_info = {
+                    'url': url_part,
+                    'status_code': status_code
+                }
+                
+                parsed['found_paths'].append(path_info)
+                parsed['summary']['total_found'] += 1
+                
+                # Marca paths interessantes
+                if status_code in [200, 301, 302, 401, 403]:
+                    parsed['summary']['interesting_paths'].append(url_part)
+            
+            elif '==> DIRECTORY:' in line:
+                directory = line.replace('==> DIRECTORY:', '').strip()
+                parsed['found_paths'].append({
+                    'url': directory,
+                    'status_code': 200,
+                    'type': 'directory'
+                })
+                parsed['summary']['total_found'] += 1
+                parsed['summary']['interesting_paths'].append(directory)
     
     return parsed
-
-def is_interesting_file(file_path: str) -> bool:
-    """Determina se um arquivo encontrado é interessante do ponto de vista de segurança"""
-    interesting_extensions = [
-        '.php', '.asp', '.aspx', '.jsp', '.cgi', '.pl', '.py',
-        '.config', '.conf', '.ini', '.xml', '.json',
-        '.sql', '.db', '.bak', '.backup', '.old', '.tmp',
-        '.log', '.txt', '.readme', '.admin', '.test'
-    ]
-    
-    interesting_names = [
-        'admin', 'login', 'config', 'database', 'backup',
-        'test', 'debug', 'phpinfo', 'info', 'robots.txt',
-        'sitemap.xml', '.htaccess', 'web.config'
-    ]
-    
-    file_path_lower = file_path.lower()
-    
-    # Verifica extensões interessantes
-    for ext in interesting_extensions:
-        if file_path_lower.endswith(ext):
-            return True
-    
-    # Verifica nomes interessantes
-    for name in interesting_names:
-        if name in file_path_lower:
-            return True
-    
-    return False
-
